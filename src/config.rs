@@ -16,6 +16,7 @@ pub struct Opener {
 }
 #[derive(Clone, Debug, Default)]
 pub struct OrderRule {
+    pub specified: u8, // top=1, bottom=2, sequence=4; scoped fields inherit individually.
     pub top: Vec<String>,
     pub bottom: Vec<String>,
     pub sequence: Vec<String>,
@@ -75,6 +76,7 @@ pub struct Config {
     pub mark_color: String,
     pub order: OrderRule,
     pub directory_order: BTreeMap<String, OrderRule>,
+    pub recursive_order: BTreeMap<String, OrderRule>,
     pub git_enabled: bool,
     pub git_max_entries: usize,
     pub keys: BTreeMap<String, String>,
@@ -371,6 +373,7 @@ impl Default for Config {
             mark_color: "#FF55FF".into(),
             order: Default::default(),
             directory_order: Default::default(),
+            recursive_order: Default::default(),
             git_enabled: true,
             git_max_entries: 4000,
             keys,
@@ -424,13 +427,23 @@ impl Config {
     pub fn order_rank(&self, directory: &Path, name: &str, is_dir: bool) -> (i8, usize) {
         let full = directory.to_string_lossy();
         let base = directory.file_name().unwrap_or_default().to_string_lossy();
-        let rule = self
+        let direct = self
             .directory_order
             .get(full.as_ref())
             .or_else(|| self.directory_order.get(base.as_ref()));
-        let top = rule.map_or(&self.order.top, |r| &r.top);
-        let bottom = rule.map_or(&self.order.bottom, |r| &r.bottom);
-        let sequence = rule.map_or(&self.order.sequence, |r| &r.sequence);
+        // Select each field independently: exact directory, nearest ancestor, global.
+        let rule = |field| {
+            direct.filter(|r| r.specified & field != 0).or_else(|| {
+                directory.ancestors().find_map(|parent| {
+                    self.recursive_order
+                        .get(parent.to_string_lossy().as_ref())
+                        .filter(|r| r.specified & field != 0)
+                })
+            })
+        };
+        let top = rule(1).map_or(&self.order.top, |r| &r.top);
+        let bottom = rule(2).map_or(&self.order.bottom, |r| &r.bottom);
+        let sequence = rule(4).map_or(&self.order.sequence, |r| &r.sequence);
         if let Some(index) = sequence
             .iter()
             .position(|p| crate::ordering::matches(p, name, is_dir))
@@ -515,6 +528,7 @@ impl Config {
                 "folder_colors",
                 "order",
                 "directory_order",
+                "recursive_order",
                 "git",
                 "tmux",
                 "input_method",
@@ -533,16 +547,24 @@ impl Config {
                     ("order", "sequence") => conf.order.sequence = order_names(value)?,
                     ("order", "top") => conf.order.top = order_names(value)?,
                     ("order", "bottom") => conf.order.bottom = order_names(value)?,
-                    ("directory_order", _) => {
-                        let mut rule = conf.order.clone();
-                        for (field, names) in value
-                            .as_table()
-                            .ok_or("directory_order entry must be a table")?
+                    ("directory_order" | "recursive_order", _) => {
+                        let mut rule = OrderRule::default();
+                        for (field, names) in
+                            value.as_table().ok_or("Ordering entry must be a table")?
                         {
                             match field.as_str() {
-                                "sequence" => rule.sequence = order_names(names)?,
-                                "top" => rule.top = order_names(names)?,
-                                "bottom" => rule.bottom = order_names(names)?,
+                                "sequence" => {
+                                    rule.sequence = order_names(names)?;
+                                    rule.specified |= 4;
+                                }
+                                "top" => {
+                                    rule.top = order_names(names)?;
+                                    rule.specified |= 1;
+                                }
+                                "bottom" => {
+                                    rule.bottom = order_names(names)?;
+                                    rule.specified |= 2;
+                                }
                                 _ => return Err(format!("Unknown ordering field: {field}")),
                             }
                         }
@@ -553,6 +575,11 @@ impl Config {
                                 .to_string_lossy()
                                 .into_owned()
                         } else {
+                            if section == "recursive_order" {
+                                return Err(
+                                    "recursive_order requires an absolute or ~/ path".into()
+                                );
+                            }
                             if key.contains(['/', '\\']) {
                                 return Err(
                                     "Directory rule must be an absolute path or directory name"
@@ -561,7 +588,11 @@ impl Config {
                             }
                             key.clone()
                         };
-                        conf.directory_order.insert(key, rule);
+                        if section == "recursive_order" {
+                            conf.recursive_order.insert(key, rule);
+                        } else {
+                            conf.directory_order.insert(key, rule);
+                        }
                     }
                     ("git", "enabled") => {
                         conf.git_enabled = value.as_bool().ok_or("git.enabled must be boolean")?
@@ -926,6 +957,7 @@ impl Config {
             .iter()
             .find(|(_, v)| key_code(v) == key)
             .map(|(a, _)| a.as_str())
+            .or_else(|| (key == "ctrl+alt+n").then_some("new_folder"))
     }
     pub fn rule<'a>(
         &self,

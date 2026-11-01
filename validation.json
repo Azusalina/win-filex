@@ -1,13 +1,13 @@
 {
-  "date": "2026-10-25",
+  "date": "2026-10-31",
   "target": "x86_64-pc-windows-gnullvm",
   "compiler": "rustc 1.99.0",
   "linker": "LLVM-MinGW 20261006 UCRT",
   "binary": "bin/filex.exe",
-  "bytes": 1249280,
-  "sha256": "7a13356ed405fc0a1fa3b1bce7a79bfb92018343bcdd804fc873360aad52127e",
+  "bytes": 1265152,
+  "sha256": "18ec3f3cdba6c9367108ed4f86ad2c01f1df98ec504ddf5e22477789804dbea3",
   "passed": {
-    "linux_shared_rust_tests": 57,
+    "linux_shared_rust_tests": 64,
     "windows_release_cross_build": true,
     "windows_test_executable_cross_build": true,
     "powershell_scripts_parse": 5,

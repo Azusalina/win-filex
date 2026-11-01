@@ -104,3 +104,17 @@ Ctrl+F（或 `/`）输入关键词并 Enter 后进入搜索模式：↑／↓ �
 选中文件夹后按 **@（Shift+2）**，输入 `unzip archive.zip` 等命令并 Enter，在当前终端前台执行，显示输出和错误，支持覆盖提示等交互输入。命令结束后 Enter 返回并刷新树，Ctrl+C 可中断命令。`!` 仍在后台执行并写日志；两者都使用所选目录作为工作目录。`[keys] run_foreground = "@"` 可自定义。普通终端不能单独区分 ! 与 Shift+!，因此使用 @ 作为可兼容 TTY 的前台入口。
 
 本地独立仓库位于 `/home/a/Documents/products/filex-win`，远端为 [Azusalina/filex-win](https://github.com/Azusalina/filex-win)。在本目录分别执行 `git add`、`git commit`、`git push`；源码已迁出 `someProducts`，母仓库不再代推本项目。
+
+
+可用 `recursive_order` 为整棵目录树设置名称／扩展名顺序（包括该目录本身及任意深度的子目录）：
+
+```toml
+[recursive_order."~/Documents/sba"]
+sequence = ["%.html", "%.css", "%.js", "%"]
+```
+
+`%` 是任意长度通配符：以上依次排列 HTML、CSS、JS，最后 `%` 接收剩余项；每组内部沿用 `sort`。也可混用名称，例如 `["README.md", "index.html", "%.html", "%.css", "%.js", "%"]`。Linux 名称匹配区分大小写。每个字段分别继承：`directory_order` 的显式字段优先于最近的 `recursive_order`，再继承更高祖先与全局 `order`；显式 `[]` 清空继承。完整 `sequence` 先于 top/bottom 匹配。递归规则仅接受绝对路径或 `~/` 路径，不会误作用于路径前缀相似的其他目录。`O` 保存的顺序只覆盖当前目录，子目录仍按递归规则排列。修改后按 `,` 重载。
+
+新建目录可用 `A`、`Ctrl+Shift+N` 或 `Ctrl+Alt+N`；`Ctrl+N` 新建文件。tmux 的 CSI-u 控制字符编码会保留 Alt／Shift，避免组合键被误判为 Ctrl+N。如果终端只发送无修饰的 Ctrl+N 字节，filex 无法恢复已丢失的 Shift，可使用 Ctrl+Alt+N 或 A。配置中若显式把 Ctrl+Alt+N 绑定到其他动作，则尊重该绑定。
+
+文件夹 `q` 面板显示所有层级的普通文件大小总和（逻辑字节数），包括隐藏文件和 filex 隐藏项，不受树展开／聚焦影响；不包含目录记录本身，不跟随软链接或 Windows reparse/junction，硬链接按路径分别计数。右侧统计在后台进行，完成后自动更新，切换目录取消旧统计；`F5`／`Ctrl+R` 重新计算。无法读取的项目显示 `INCOMPLETE` 及跳过数，不能视为完整总量。这不是磁盘分配块用量，稀疏／压缩文件的实际磁盘占用可能不同。

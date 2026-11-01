@@ -23,6 +23,27 @@ use std::{
     rc::Rc,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+// tmux CSI-u may encode C-M-n as codepoint 14 plus ALT, without CONTROL.
+// Recover the implicit control modifier before normalizing the character.
+fn character_key(mut c: char, mut modifiers: KeyModifiers) -> String {
+    if ('\u{1}'..='\u{1a}').contains(&c) {
+        c = (b'a' + c as u8 - 1) as char;
+        modifiers.insert(KeyModifiers::CONTROL);
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic() {
+        let mut prefix = "Ctrl".to_owned();
+        if modifiers.contains(KeyModifiers::ALT) {
+            prefix.push_str("+Alt");
+        }
+        // CSI-u alternate shifted codepoints can carry Shift in the uppercase letter.
+        if modifiers.contains(KeyModifiers::SHIFT) || c.is_ascii_uppercase() {
+            prefix.push_str("+Shift");
+        }
+        key_code(&format!("{prefix}+{c}"))
+    } else {
+        c.to_string()
+    }
+}
 fn ioerr(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -87,6 +108,9 @@ fn read_key(auto_english: bool) -> Result<String, String> {
             return Ok("\x03".into());
         }
         if !event::poll(std::time::Duration::from_millis(200)).map_err(ioerr)? {
+            if files::folder_size::ready() {
+                return Ok("size_refresh".into());
+            }
             if crate::git_status::ready() {
                 return Ok("git_refresh".into());
             }
@@ -120,21 +144,7 @@ fn read_key(auto_english: bool) -> Result<String, String> {
             Event::Resize(_, _) => return Ok("resize".into()),
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 let name = match key.code {
-                    KeyCode::Char(c) => {
-                        if key.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic()
-                        {
-                            let mut prefix = "Ctrl".to_owned();
-                            if key.modifiers.contains(KeyModifiers::ALT) {
-                                prefix.push_str("+Alt");
-                            }
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                prefix.push_str("+Shift");
-                            }
-                            key_code(&format!("{prefix}+{c}"))
-                        } else {
-                            c.to_string()
-                        }
-                    }
+                    KeyCode::Char(c) => character_key(c, key.modifiers),
                     KeyCode::Enter => "enter".into(),
                     KeyCode::Tab | KeyCode::BackTab => "\t".into(),
                     KeyCode::Esc => "escape".into(),
@@ -580,6 +590,7 @@ struct Ui {
     config_path: PathBuf,
     dashboard: bool,
     meta_path: Option<PathBuf>,
+    folder_size: files::folder_size::Job,
     meta: String,
     message: String,
     exit_directory: Option<PathBuf>,
@@ -968,11 +979,19 @@ impl Ui {
                 )?
             }
             let path = self.selection_path();
-            if self.meta_path.as_ref() != Some(&path) {
-                self.meta = files::dashboard(
+            let changed = self.meta_path.as_ref() != Some(&path);
+            if changed {
+                let target = files::folder_size::directory(&path).then(|| path.clone());
+                self.folder_size.request(target, self.meta_path.is_none());
+            }
+            if changed || self.folder_size.poll() {
+                self.folder_size.poll();
+                let folder_total = self.folder_size.text();
+                self.meta = files::dashboard_with_size(
                     &path,
                     &self.pane.browser.root.borrow().path,
                     &self.pane.browser.conf,
+                    folder_total.as_deref(),
                 );
                 self.meta_path = Some(path)
             }
@@ -1889,6 +1908,9 @@ impl Ui {
             }
             "dashboard" => {
                 self.dashboard = !self.dashboard;
+                if !self.dashboard {
+                    self.folder_size.request(None, false);
+                }
                 self.meta_path = None;
                 if self.dashboard && (terminal::size().map_err(ioerr)?.0 as usize) < 70 {
                     self.message = ui_format!(
@@ -2115,9 +2137,9 @@ impl Ui {
                     .collect::<Vec<_>>()
                     .join("\n");
                 if terminal_profile::get().ascii {
-                    text.push_str("\n\nUp/Down (k/j): all visible peers at the same depth; wrap around.\nRight (l): expand / enter child; Left: parent (mirrored on right pane).\nh collapse; E/C expand/collapse all; . hidden files; f focus root; F focus this level / restore this level and descendants.\na / Ctrl+N new file; A new folder (Ctrl+Shift+N may equal Ctrl+N on TTY).\nr rename; c/m copy/move; Delete/D trash, Enter again confirms, Esc cancels.\ny / Ctrl+Alt+C copy absolute path; Ctrl+V paste it in input prompts.\nPaths use the Windows clipboard and an internal clipboard.\nx exit to selected folder (file: parent); Q / Ctrl+C quit.\n! run a shell command in the selected folder in background (PID/log shown).\n@ run a command in the folder with terminal output and interactive input; Enter returns.\nG Git menu: add selected / commit staged / push / add ALL+commit+push.\nEnter expands folders (cursor stays); files: open with. w menu; o default; p preview; q dashboard; I link information.\nHeadless defaults: Nano, Neovim, Vim, then built-in preview; no automatic script execution.\nPython / Rscript / Bash can be explicitly selected to run scripts.\nCtrl+F / / search; Up/Down or n/N cycle matches, Esc exits find mode; g / Ctrl+L change root.\nCtrl+R / F5 refresh; comma reload config; [ / ] dashboard width.\nv toggle grouped/classic tree; O reorder and save this directory; z hide item; Z restore hidden items.\nH/L pan; PgUp/PgDn page peers; Ctrl+U clear input.\nTerminal openers reuse an idle pane on the right in tmux.\nSpace marks/unmarks files/folders; Esc clears marks. c/m: choose destination with arrows, Enter on + places items in its folder; + places here, A creates folder; t types a destination file/directory path; Esc cancels. Existing regular files require Enter confirmation to replace; folders/links are not replaced. Rename prompts: Left/Right/Home/End, Delete/Backspace edit at cursor.");
+                    text.push_str("\n\nUp/Down (k/j): all visible peers at the same depth; wrap around.\nRight (l): expand / enter child; Left: parent (mirrored on right pane).\nh collapse; E/C expand/collapse all; . hidden files; f focus root; F focus this level / restore this level and descendants.\na / Ctrl+N new file; A / Ctrl+Alt+N new folder (Ctrl+Shift+N also works with enhanced keys).\nr rename; c/m copy/move; Delete/D trash, Enter again confirms, Esc cancels.\ny / Ctrl+Alt+C copy absolute path; Ctrl+V paste it in input prompts.\nPaths use the Windows clipboard and an internal clipboard.\nx exit to selected folder (file: parent); Q / Ctrl+C quit.\n! run a shell command in the selected folder in background (PID/log shown).\n@ run a command in the folder with terminal output and interactive input; Enter returns.\nG Git menu: add selected / commit staged / push / add ALL+commit+push.\nEnter expands folders (cursor stays); files: open with. w menu; o default; p preview; q dashboard; I link information.\nHeadless defaults: Nano, Neovim, Vim, then built-in preview; no automatic script execution.\nPython / Rscript / Bash can be explicitly selected to run scripts.\nCtrl+F / / search; Up/Down or n/N cycle matches, Esc exits find mode; g / Ctrl+L change root.\nCtrl+R / F5 refresh; comma reload config; [ / ] dashboard width.\nv toggle grouped/classic tree; O reorder and save this directory; z hide item; Z restore hidden items.\nH/L pan; PgUp/PgDn page peers; Ctrl+U clear input.\nTerminal openers reuse an idle pane on the right in tmux.\nSpace marks/unmarks files/folders; Esc clears marks. c/m: choose destination with arrows, Enter on + places items in its folder; + places here, A creates folder; t types a destination file/directory path; Esc cancels. Existing regular files require Enter confirmation to replace; folders/links are not replaced. Rename prompts: Left/Right/Home/End, Delete/Backspace edit at cursor.");
                 } else {
-                    text.push_str("\n\n横向：↑↓ 同层跨父目录，首尾循环 · → 展开 / 进入子级 · ← 返回父级\n根节点的返回父级键引入上级目录。\nh 收起 · [ / ] 缩窄 / 加宽 q 信息面板（每次 4 列）\nx 退出并将启动 terminal 切到选中目录（文件使用父目录）\n! 后台命令；@ 前台命令，显示输出并接受交互输入，结束 Enter 返回\nCtrl+N 新建文件 · Ctrl+Shift+N 新建目录（a/A 也可）\n↗ 软链接 · H×N 硬链接数 · q 查看信息 · I 查看完整链接路径\nr / Shift+R 重命名 · Ctrl+R / F5 / Ctrl+F5 刷新\nCtrl+Alt+C / y 复制选中项目的绝对路径；输入框 Ctrl+V 粘贴\nf 当前目录设为根并刷新 · F 临时聚焦/恢复分支\nEnter 展开目录（光标保留）/ 文件选择打开方式 · w 打开菜单 · o 默认程序\nCtrl+F / / 搜索，↑↓ 匹配项，Esc 退出搜索 · q 右侧时间 / 大小\nDelete / D 移到回收站，再次按 Enter 确认\nv 分组/普通树切换 · O 调整并保存当前同级顺序 · z 隐藏 · Z 管理恢复\nc/m 后方向键选目标目录，Enter 执行 / Esc 取消\nE/C 展开 / 收起全部\nH/L 横移 · PgUp/PgDn 同级翻页 · Ctrl+U 清空输入\nWindows 终端程序在当前窗口运行。\nSpace 多选，Esc 清空；c/m 后方向键选目标目录，选中 + 后 Enter 放入该目录；+ 键放入当前目标，A 新建目录，t 输入地址，Esc 取消。已有普通文件需再次 Enter 确认替换。输入框支持左右/Home/End及光标处增删。\n缓存达到上限时请收起部分分支或增大 max_loaded_nodes。");
+                    text.push_str("\n\n横向：↑↓ 同层跨父目录，首尾循环 · → 展开 / 进入子级 · ← 返回父级\n根节点的返回父级键引入上级目录。\nh 收起 · [ / ] 缩窄 / 加宽 q 信息面板（每次 4 列）\nx 退出并将启动 terminal 切到选中目录（文件使用父目录）\n! 后台命令；@ 前台命令，显示输出并接受交互输入，结束 Enter 返回\nCtrl+N 新建文件 · Ctrl+Shift+N / Ctrl+Alt+N 新建目录（a/A 也可）\n↗ 软链接 · H×N 硬链接数 · q 查看信息 · I 查看完整链接路径\nr / Shift+R 重命名 · Ctrl+R / F5 / Ctrl+F5 刷新\nCtrl+Alt+C / y 复制选中项目的绝对路径；输入框 Ctrl+V 粘贴\nf 当前目录设为根并刷新 · F 临时聚焦/恢复分支\nEnter 展开目录（光标保留）/ 文件选择打开方式 · w 打开菜单 · o 默认程序\nCtrl+F / / 搜索，↑↓ 匹配项，Esc 退出搜索 · q 右侧时间 / 大小\nDelete / D 移到回收站，再次按 Enter 确认\nv 分组/普通树切换 · O 调整并保存当前同级顺序 · z 隐藏 · Z 管理恢复\nc/m 后方向键选目标目录，Enter 执行 / Esc 取消\nE/C 展开 / 收起全部\nH/L 横移 · PgUp/PgDn 同级翻页 · Ctrl+U 清空输入\nWindows 终端程序在当前窗口运行。\nSpace 多选，Esc 清空；c/m 后方向键选目标目录，选中 + 后 Enter 放入该目录；+ 键放入当前目标，A 新建目录，t 输入地址，Esc 取消。已有普通文件需再次 Enter 确认替换。输入框支持左右/Home/End及光标处增删。\n缓存达到上限时请收起部分分支或增大 max_loaded_nodes。");
                 }
                 self.pager(label("filex 快捷键", "filex keys"), &text)?
             }
@@ -2174,6 +2196,7 @@ pub fn run(browser: Browser, path: PathBuf) -> Result<Option<PathBuf>, String> {
         config_path: path,
         dashboard: false,
         meta_path: None,
+        folder_size: Default::default(),
         meta: String::new(),
         message: String::new(),
         exit_directory: None,
@@ -2182,7 +2205,7 @@ pub fn run(browser: Browser, path: PathBuf) -> Result<Option<PathBuf>, String> {
         ui.draw()?;
         let key = read_key(ui.pane.browser.conf.auto_english)?;
         ui.pane.focus = true;
-        if !["H", "L", "resize", "git_refresh"].contains(&key.as_str()) {
+        if !["H", "L", "resize", "git_refresh", "size_refresh"].contains(&key.as_str()) {
             ui.message.clear()
         }
         match ui.action(&key) {
@@ -2241,12 +2264,33 @@ mod tree_tests {
             config_path: root.join("settings.conf"),
             dashboard: false,
             meta_path: None,
+            folder_size: Default::default(),
             meta: String::new(),
             message: String::new(),
             exit_directory: None,
         }
     }
 
+    #[test]
+    fn control_characters_keep_alt_and_shift_from_tmux_csi_u() {
+        let conf = Config::default();
+        for (c, modifiers, expected) in [
+            ('\x0e', KeyModifiers::NONE, "new_file"),
+            ('\x0e', KeyModifiers::ALT, "new_folder"),
+            ('n', KeyModifiers::CONTROL | KeyModifiers::ALT, "new_folder"),
+            (
+                'n',
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                "new_folder",
+            ),
+            ('N', KeyModifiers::CONTROL, "new_folder"),
+        ] {
+            assert_eq!(conf.action(&character_key(c, modifiers)), Some(expected));
+        }
+        assert_eq!(character_key('\x03', KeyModifiers::ALT), "ctrl+alt+c");
+        assert_eq!(character_key('\x03', KeyModifiers::NONE), "\x03");
+        assert_eq!(character_key('N', KeyModifiers::SHIFT), "N");
+    }
     #[test]
     fn enter_expands_folders_without_moving_or_closing_other_branches() {
         let f = Fixture::new();
@@ -2401,16 +2445,40 @@ mod tree_tests {
             .find(|n| n.borrow().path == parent)
             .unwrap();
         ui.pane.browser.expand(&node, None);
-        assert!(node.borrow().children.first().unwrap().borrow().create_entry);
+        assert!(
+            node.borrow()
+                .children
+                .first()
+                .unwrap()
+                .borrow()
+                .create_entry
+        );
         ui.pane.browser.refresh();
-        assert!(node.borrow().children.first().unwrap().borrow().create_entry);
+        assert!(
+            node.borrow()
+                .children
+                .first()
+                .unwrap()
+                .borrow()
+                .create_entry
+        );
         for grouped in [false, true] {
             ui.pane.browser.conf.grouped = grouped;
             let layout = Layout::new(&ui.pane.browser);
             let plus = node.borrow().children.first().unwrap().clone();
-            let plus_y = layout.items.iter().find(|p| Rc::ptr_eq(&p.node, &plus)).unwrap().y;
+            let plus_y = layout
+                .items
+                .iter()
+                .find(|p| Rc::ptr_eq(&p.node, &plus))
+                .unwrap()
+                .y;
             for child in &node.borrow().children {
-                let child_y = layout.items.iter().find(|p| Rc::ptr_eq(&p.node, child)).unwrap().y;
+                let child_y = layout
+                    .items
+                    .iter()
+                    .find(|p| Rc::ptr_eq(&p.node, child))
+                    .unwrap()
+                    .y;
                 assert!(plus_y <= child_y);
             }
         }

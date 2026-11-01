@@ -226,6 +226,116 @@ mod tests {
         assert_eq!(c.order_rank(&f.0, "d-first", false), (-1, 0));
     }
     #[test]
+    fn recursive_order_inherits_fields_and_uses_nearest_ancestor() {
+        let f = Fixture::new();
+        let site = f.0.join("site");
+        let nested = site.join("nested");
+        let deep = nested.join("deep");
+        fs::create_dir_all(&deep).unwrap();
+        let config = f.0.join("config");
+        fs::write(&config, format!(
+            "[order]\nbottom=['node_modules']\n[recursive_order.'{}']\nsequence=['README.md','%.html','%.css','%.js','%']\n[recursive_order.'{}']\ntop=['nested-pin']\n[directory_order.'{}']\nbottom=[]\n",
+            site.display(), nested.display(), deep.display()
+        )).unwrap();
+        let c = Config::load(&config).unwrap();
+        for directory in [&site, &nested, &deep] {
+            assert_eq!(c.order_rank(directory, "README.md", false), (-2, 0));
+            assert_eq!(c.order_rank(directory, "z.html", false), (-2, 1));
+            assert_eq!(c.order_rank(directory, "a.css", false), (-2, 2));
+            assert_eq!(c.order_rank(directory, "a.js", false), (-2, 3));
+        }
+        assert_eq!(
+            c.order_rank(&f.0.join("site-other"), "z.html", false),
+            (0, 0)
+        );
+        assert_eq!(c.order_rank(&f.0, "z.html", false), (0, 0));
+        // An exact, empty field clears inheritance while unrelated fields still inherit.
+        fs::write(&config, format!(
+            "[order]\nbottom=['node_modules']\n[recursive_order.'{}']\nsequence=['%.html','%.css','%.js']\n[recursive_order.'{}']\nsequence=['%.js','%.html','%.css']\n[directory_order.'{}']\nsequence=[]\ntop=['special.txt']\n",
+            site.display(), nested.display(), deep.display()
+        )).unwrap();
+        let c = Config::load(&config).unwrap();
+        assert_eq!(c.order_rank(&site, "z.html", false), (-2, 0));
+        assert_eq!(c.order_rank(&nested, "a.js", false), (-2, 0));
+        assert_eq!(c.order_rank(&deep, "z.html", false), (0, 0));
+        assert_eq!(c.order_rank(&deep, "special.txt", false), (-1, 0));
+        assert_eq!(c.order_rank(&deep, "node_modules", true), (1, 0));
+    }
+    #[test]
+    fn recursive_order_applies_to_tree_and_manual_sequence_stays_local() {
+        let f = Fixture::new();
+        let site = f.0.join("site");
+        let nested = site.join("nested");
+        let deeper = nested.join("deeper");
+        fs::create_dir_all(&deeper).unwrap();
+        for directory in [&site, &nested, &deeper] {
+            for name in ["a.js", "m.css", "z.html"] {
+                fs::write(directory.join(name), "").unwrap();
+            }
+        }
+        let config = f.0.join("config");
+        fs::write(
+            &config,
+            format!(
+                "[recursive_order.'{}']\nsequence=['%.html','%.css','%.js','%']\n",
+                site.display()
+            ),
+        )
+        .unwrap();
+        for directory in [&site, &nested, &deeper] {
+            let b = Browser::new(directory, Config::load(&config).unwrap()).unwrap();
+            let names = b
+                .root
+                .borrow()
+                .children
+                .iter()
+                .map(|n| {
+                    n.borrow()
+                        .path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(&names[..3], &["z.html", "m.css", "a.js"]);
+        }
+        save_sequence(
+            &config,
+            &nested,
+            &["a.js".into(), "m.css".into(), "z.html".into()],
+        )
+        .unwrap();
+        let c = Config::load(&config).unwrap();
+        assert_eq!(c.order_rank(&nested, "a.js", false), (-2, 0));
+        assert_eq!(c.order_rank(&deeper, "a.js", false), (-2, 2));
+        assert!(
+            fs::read_to_string(config)
+                .unwrap()
+                .contains("recursive_order")
+        );
+    }
+    #[test]
+    fn recursive_order_rejects_relative_paths_and_unknown_fields() {
+        let f = Fixture::new();
+        let config = f.0.join("config");
+        fs::write(&config, "[recursive_order.site]\nsequence=['%.html']\n").unwrap();
+        assert!(Config::load(&config).unwrap_err().contains("absolute"));
+        fs::write(
+            &config,
+            format!(
+                "[recursive_order.'{}']\nextensions=['.html']\n",
+                f.0.display()
+            ),
+        )
+        .unwrap();
+        assert!(
+            Config::load(&config)
+                .unwrap_err()
+                .contains("Unknown ordering field")
+        );
+    }
+    #[test]
     fn preferences_preserve_comments_symlinks_and_unrelated_values() {
         let f = Fixture::new();
         let target = f.0.join("config");

@@ -1,3 +1,5 @@
+#[path = "folder_size.rs"]
+pub mod folder_size;
 use crate::{
     config::{Config, expand_home, product_root},
     model::clean,
@@ -360,6 +362,14 @@ fn date(time: io::Result<std::time::SystemTime>) -> String {
     )
 }
 pub fn metadata(path: &Path, root: &Path, conf: &Config) -> String {
+    metadata_with_size(path, root, conf, None)
+}
+fn metadata_with_size(
+    path: &Path,
+    root: &Path,
+    conf: &Config,
+    folder_total: Option<&str>,
+) -> String {
     let read = || -> Result<String, String> {
         let info = fs::symlink_metadata(path).map_err(err)?;
         let created = date(info.created());
@@ -370,19 +380,19 @@ pub fn metadata(path: &Path, root: &Path, conf: &Config) -> String {
         } else {
             label("文件", "File")
         };
-        let note = if info.is_dir() {
+        let note = if info.is_dir() && folder_size::directory(path) {
             label(
-                "目录自身大小，不含子文件总量",
-                "Directory metadata size; excludes contents",
+                "递归文件总大小；含隐藏项，不跟随链接；硬链接按路径计数",
+                "All nested files; includes hidden; no link traversal; hard links per path",
             )
-        } else if info.file_type().is_symlink() {
-            label("符号链接自身大小", "Symbolic link size")
+        } else if info.file_type().is_symlink() || info.is_dir() {
+            label("链接自身大小；不跟随目标", "Link metadata size; target not followed")
         } else {
             ""
         };
         Ok(ui_format!(
-            "{}\n{kind}\n\nCreated / 创建时间\n{created}\n\nModified / 修改时间\n{}\n\nSize / 大小\n{} bytes\n{note}\n\n{}\nPath / 路径\n{}",
-            "{}\n{kind}\n\nCreated\n{created}\n\nModified\n{}\n\nSize\n{} bytes\n{note}\n\n{}\nPath\n{}",
+            "{}\n{kind}\n\nCreated / 创建时间\n{created}\n\nModified / 修改时间\n{}\n\nSize / 大小\n{}\n{note}\n\n{}\nPath / 路径\n{}",
+            "{}\n{kind}\n\nCreated\n{created}\n\nModified\n{}\n\nSize\n{}\n{note}\n\n{}\nPath\n{}",
             clean(
                 &path
                     .file_name()
@@ -390,7 +400,13 @@ pub fn metadata(path: &Path, root: &Path, conf: &Config) -> String {
                     .to_string_lossy()
             ),
             date(info.modified()),
-            info.len(),
+            if info.is_dir() && folder_size::directory(path) {
+                folder_total
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| folder_size::synchronous(path))
+            } else {
+                format!("{} bytes", info.len())
+            },
             crate::links::details(path, root, &info, conf),
             clean(&path.to_string_lossy())
         ))
@@ -607,7 +623,19 @@ pub fn start_markdown(command: &mut Command) -> Result<String, String> {
 
 /// Dashboard text with a bounded text head; I opens the same content in a pager.
 pub fn dashboard(path: &Path, root: &Path, conf: &Config) -> String {
-    let metadata = metadata(path, root, conf);
+    dashboard_with_size(path, root, conf, None)
+}
+pub fn dashboard_with_size(
+    path: &Path,
+    root: &Path,
+    conf: &Config,
+    folder_total: Option<&str>,
+) -> String {
+    let metadata = if folder_total.is_none() {
+        metadata(path, root, conf)
+    } else {
+        metadata_with_size(path, root, conf, folder_total)
+    };
     let compact = metadata
         .lines()
         .filter(|line| !line.is_empty())

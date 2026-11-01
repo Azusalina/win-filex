@@ -116,3 +116,27 @@ Ctrl+F（或 `/`）输入关键词并 Enter 后进入搜索模式：↑／↓ �
 ## 独立仓库迁移（2026-10-27）
 
 源码及本地数据迁至 `/home/a/Documents/products/filex-win`，已有提交历史保留。现在使用本项目自己的 `.git` 和 `origin` 独立提交、推送；不再通过 `someProducts` 的 push hook 发布。本次目录／仓库重命名保留配置目录、应用名称和已有用户数据。
+
+2026-10-30：继承式目录排序
+
+
+可用 `recursive_order` 为整棵目录树设置名称／扩展名顺序（包括该目录本身及任意深度的子目录）：
+
+```toml
+[recursive_order."~/Documents/sba"]
+sequence = ["%.html", "%.css", "%.js", "%"]
+```
+
+`%` 是任意长度通配符：以上依次排列 HTML、CSS、JS，最后 `%` 接收剩余项；每组内部沿用 `sort`。也可混用名称，例如 `["README.md", "index.html", "%.html", "%.css", "%.js", "%"]`。Linux 名称匹配区分大小写。每个字段分别继承：`directory_order` 的显式字段优先于最近的 `recursive_order`，再继承更高祖先与全局 `order`；显式 `[]` 清空继承。完整 `sequence` 先于 top/bottom 匹配。递归规则仅接受绝对路径或 `~/` 路径，不会误作用于路径前缀相似的其他目录。`O` 保存的顺序只覆盖当前目录，子目录仍按递归规则排列。修改后按 `,` 重载。
+
+实现：`recursive_order` 复用名称模式和 OrderRule，记录 top/bottom/sequence 的显式字段；按目录祖先链逐字段选取最近规则。路径在载入时规范化，比较采用 Path 组件；浏览文件时不增加文件元数据访问。保留 `directory_order` 的单目录用途及注释保留的 O 排序写回。
+
+本次验证：Linux 62 项 Rust、Windows 共享逻辑 60 项 Rust、Linux 20 项 Python／CLI／PTY 检查通过；覆盖三层扩展名排序、名称模式、逐字段继承、最近祖先覆盖、显式 []、相似路径隔离、手动排序不泄漏到后代、配置兼容与既有核心操作。Windows release 与测试程序已交叉编译，未实机验证。已在本机主配置设置 SBA 递归规则；根目录用 sequence=[] 保留 front-end / back-end / docs 置顶，配置软链接不变。
+
+新建目录可用 `A`、`Ctrl+Shift+N` 或 `Ctrl+Alt+N`；`Ctrl+N` 新建文件。tmux 的 CSI-u 控制字符编码会保留 Alt／Shift，避免组合键被误判为 Ctrl+N。如果终端只发送无修饰的 Ctrl+N 字节，filex 无法恢复已丢失的 Shift，可使用 Ctrl+Alt+N 或 A。配置中若显式把 Ctrl+Alt+N 绑定到其他动作，则尊重该绑定。
+
+2026-10-31 tmux 新建目录修饰键修复：真实连接客户端可复现 ESC + Ctrl+N 经 tmux 编成 CSI-u 控制码 14 + Alt，原字符归一化丢失 Alt 后误进入新建文件。现在先还原控制字符隐含的 Control，保留 Alt/Shift，并识别大写字符承载的 Shift；Ctrl+Alt+N 为新建目录默认补充快捷键，显式配置绑定优先，Ctrl+N 保持新建文件。Linux 63 / Windows 共享逻辑 61 项 Rust 测试、23 项 tmux/TTY/导航回归与 2 项真实客户端／直接输入检查通过。已重新构建 Linux / Windows release 及 Windows 测试程序；Windows 未实机验证。tmux 3.8 客户端不接收 Kitty alternate-key 语法，该输入形式只在直接连接 filex 时测试。未改变用户 tmux 配置；未验证物理 Konsole 按键。
+
+文件夹 `q` 面板显示所有层级的普通文件大小总和（逻辑字节数），包括隐藏文件和 filex 隐藏项，不受树展开／聚焦影响；不包含目录记录本身，不跟随软链接或 Windows reparse/junction，硬链接按路径分别计数。右侧统计在后台进行，完成后自动更新，切换目录取消旧统计；`F5`／`Ctrl+R` 重新计算。无法读取的项目显示 `INCOMPLETE` 及跳过数，不能视为完整总量。这不是磁盘分配块用量，稀疏／压缩文件的实际磁盘占用可能不同。
+
+2026-10-31 文件夹大小统计验证：Linux 66 项 Rust、Windows 共享逻辑 64 项 Rust、24 项 Python 元数据/核心检查与 5 项 Linux 文件夹大小/终端回归通过。实际 PTY 覆盖隐藏与视图排除项、多级文件、硬链接按路径计数、软链接循环/FIFO跳过、统计完成自动重绘、修改文件后刷新、切换空目录。单个可取消后台线程以深度优先迭代扫描，不缓存整棵目录；普通 q 面板异步，I 分页及 metadata API 按需同步计算。最新 release 的 8 个内存场景均小于 15 MB，最高 VmHWM 7932 KiB（8.122 MB，十进制）；原始结果与 SHA256 见 Linux memory-validation.json。Windows release / 测试程序已交叉编译，未实机验证。

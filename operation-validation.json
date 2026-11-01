@@ -18,5 +18,37 @@
   "temporary_focus": "Per-parent Vec of focus paths supports nested levels and independent branches. F on focused item clears it and all descendant rules, preserving other branches. Both Rust suites 57 passed; 4 Linux PTY focus checks passed (custom/default key, nested levels, independent branches, cascading restore, search, refresh, pending copy, unchanged config).",
   "foreground_command": "@ in selected directory: stdout/stderr, interactive stdin, real unzip in temporary fixture, exit status 7 and return, SIGINT child interruption with filex remaining usable. Background ! remains unchanged.",
   "linux_memory_peak_mb": 7.309,
-  "default_layout": "grouped=false by default, examples and Linux personal config; v enables direct-file grouping and toggles back. Both Rust suites: 56 tests each; Linux configuration/navigation/TTY subset: 26 passed."
+  "default_layout": "grouped=false by default, examples and Linux personal config; v enables direct-file grouping and toggles back. Both Rust suites: 56 tests each; Linux configuration/navigation/TTY subset: 26 passed.",
+  "recursive_order_validation": {
+    "date": "2026-10-30",
+    "linux_rust_tests": 62,
+    "windows_shared_rust_tests": 60,
+    "linux_python_cli_pty_tests": 20,
+    "checks": "Ancestor inheritance, mixed filename/extension patterns, closest override, explicit empty fields, sibling-prefix isolation, manual sequence remains local; Python compatibility and CLI tree rendering at three depths; existing preferences/core PTY suite passed.",
+    "personal_config": "/home/a/.config/fileX/filex.conf: recursive_order for /home/a/Documents/sba; root sequence=[] preserves existing folder pins; filex.conf symlink retained.",
+    "windows": "Release and test executable cross-compiled; native Windows runtime not tested."
+  },
+  "tmux_creation_modifier_validation": {
+    "date": "2026-10-31",
+    "linux_rust_tests": 63,
+    "windows_shared_rust_tests": 61,
+    "linux_tmux_tty_navigation_tests": 23,
+    "attached_client_and_direct_sequence_tests": 2,
+    "reproduction": "Attached tmux client ESC + Ctrl+N becomes CSI-u codepoint 14 with ALT; old character normalization discarded ALT and dispatched new_file.",
+    "fix": "Recover implicit CONTROL for control characters, preserve ALT/SHIFT and uppercase shifted codepoint; Ctrl+Alt+N defaults to new_folder while explicit configured bindings win. Ctrl+N remains new_file.",
+    "coverage": "Real attached isolated tmux: plain Ctrl+N, Konsole xterm Ctrl+Shift+N, CSI-u Ctrl+Shift+N, legacy Alt+Ctrl+N, CSI-u Ctrl+Alt+N, control codepoint ALT and SHIFT. Direct Kitty shifted-codepoint test also passed.",
+    "limits": "tmux 3.8 does not accept Kitty alternate-key syntax at client input; that form tested directly. Physical Konsole keyboard gesture and native Windows runtime not verified. Unmodified control bytes cannot recover modifiers discarded upstream."
+  },
+  "recursive_folder_size_validation": {
+    "date": "2026-10-31",
+    "linux_rust_tests": 66,
+    "windows_shared_rust_tests": 64,
+    "python_metadata_core_tests": 24,
+    "linux_folder_size_runtime_pty_tests": 5,
+    "memory_scenarios": 8,
+    "linux_peak_vm_hwm_kib": 7932,
+    "linux_peak_vm_hwm_mb_decimal": 8.122,
+    "behavior": "Recursive sum of regular-file logical lengths, including hidden/view-excluded entries; no directory metadata, symlink/reparse traversal or special-file reads. Hardlinks counted per path. Unreadable entries show INCOMPLETE. q panel uses one cancellable worker and automatically redraws; F5 refresh recalculates. I/metadata API computes on demand synchronously.",
+    "windows": "Release and test executable cross-compiled; native runtime not verified."
+  }
 }
